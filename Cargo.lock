@@ -59,6 +59,7 @@ checksum = "eef78b64d87775463c549fbd80e19249ef436ea3bf1de2a1eb7e717ec7fab1e9"
 name = "lightsock-rs"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "rand",
  "tokio",
 ]
