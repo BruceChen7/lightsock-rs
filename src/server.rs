@@ -1,21 +1,25 @@
-use tokio::net::{TcpListener, TcpStream};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::broadcast,
+};
 
 use crate::client::Client;
 
-struct ProxyServer {
+pub struct ProxyServer {
+    client: Client,
 }
 
 impl ProxyServer {
-    fn new() -> Self {
-        Self {
-        }
+    pub async fn new() -> crate::Result<ProxyServer> {
+        let (notify_shutdown, _) = broadcast::channel(1);
+        let client = Client::new(32, notify_shutdown, "127.0.0.1:6333").await?;
+        Ok(ProxyServer { client })
     }
 
     async fn run(&mut self) {
         // Bind the listener to the address
         let listener = TcpListener::bind("127.0.0.1:6379").await.unwrap();
         loop {
-
             // The second item contains the ip and port of the new connection.
             let (socket, _) = listener.accept().await.unwrap();
 
@@ -28,5 +32,4 @@ impl ProxyServer {
     }
 }
 
-async fn process(socket: TcpStream) {
-}
+async fn process(socket: TcpStream) {}

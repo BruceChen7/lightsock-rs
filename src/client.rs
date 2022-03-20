@@ -1,62 +1,82 @@
-use bytes::BytesMut;
+use std::sync::{Arc, Mutex};
+
+use bytes::{BufMut, Bytes, BytesMut};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
+    io::BufWriter,
     net::TcpStream,
-    sync::{broadcast, broadcast::Sender, futures::Notified, mpsc},
+    sync::{broadcast, broadcast::Sender, futures::Notified, mpsc, oneshot},
 };
 
-#[derive(Debug)]
-pub struct Connection {
-    stream: BufWriter<TcpStream>,
+type Response<T> = oneshot::Sender<crate::Result<T>>;
 
+#[derive(Debug)]
+struct Connection {
+    stream: BufWriter<TcpStream>,
     // The buffer for reading frames.
     buffer: BytesMut,
 }
 
 impl Connection {
-        pub fn new(socket: TcpStream) -> Connection {
-            Self {
-                stream: BufWriter::new(socket),
-                buffer: BytesMut::with_capacity(4 * 1024),
-            }
+    pub fn new(socket: TcpStream) -> Connection {
+        Self {
+            stream: BufWriter::new(socket),
+            buffer: BytesMut::with_capacity(4 * 1024),
+        }
     }
 }
 
 pub struct Client {
-    conn_size: i32,
-    connections: Vec<Connection>,
-    task_recv: mpsc::Receiver<()>,
-    task_sender: mpsc::Sender<()>,
+    connection_pools: Arc<ConnectionPool>,
     notify_shutdown: broadcast::Sender<()>,
 }
 
-pub enum ReqTask {
-    Frame(String),
+impl Client {
+    pub async fn new(s: i32, notify: Sender<()>, addr: &str) -> crate::Result<Self> {
+        let pool = ConnectionPool::new(s, addr).await?;
+        Ok(Self {
+            connection_pools: Arc::new(pool),
+            notify_shutdown: notify,
+        })
+    }
+
+    pub async fn request(&mut self, content: Bytes) -> crate::Result<Option<Bytes>> {
+        let (resp_tx, resp_rx) = oneshot::channel();
+        let task = ReqTask {
+            req: Some(content),
+            rsp: resp_tx,
+        };
+        let p = self.connection_pools.clone();
+        tokio::spawn(async move {
+            p.add_task(task).await;
+        });
+        resp_rx.await?
+    }
 }
 
-impl Client {
-    pub fn new(s: i32, notify: Sender<()>) -> Self {
-        let (task_tx, task_rx) = mpsc::channel(s as usize);
-        Self {
-            conn_size: s,
-            connections: vec![],
-            task_sender: task_tx,
-            task_recv: task_rx,
-            notify_shutdown: notify,
-        }
-    }
-    pub async fn start(&mut self) -> crate::Result<()> {
-        for _ in 0..self.conn_size {
-            let socket = TcpStream::connect("127.0.0.1:3333").await?;
+struct ConnectionPool {
+    connections: Mutex<Vec<Connection>>,
+}
+
+impl ConnectionPool {
+    pub async fn new(s: i32, addr: &str) -> crate::Result<ConnectionPool> {
+        let mut connections: Vec<Connection> = vec![];
+        for _ in 0..s {
+            let socket = TcpStream::connect(addr).await?;
             let connection = Connection::new(socket);
-            self.connections.push(connection);
-            tokio::spawn(async move {
-            });
+            connections.push(connection);
         }
-        return Ok(())
+        Ok(Self {
+            connections: Mutex::new(connections),
+        })
     }
 
-    pub async fn request(task: ReqTask) {}
+    pub async fn add_task(&self, task: ReqTask) -> crate::Result<bool> {
+        let connections = self.connections.lock().unwrap();
+        Ok(true)
+    }
+}
 
-    fn add_task(task: ReqTask) {}
+struct ReqTask {
+    req: Option<Bytes>,
+    rsp: Response<Option<Bytes>>,
 }
