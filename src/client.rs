@@ -1,10 +1,11 @@
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use crate::shutdown::Shutdown;
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::{
     io::BufWriter,
     net::TcpStream,
-    sync::{broadcast, broadcast::Sender, futures::Notified, mpsc, oneshot},
+    sync::{broadcast, broadcast::Sender, oneshot},
 };
 
 type Response<T> = oneshot::Sender<crate::Result<T>>;
@@ -14,13 +15,27 @@ struct Connection {
     stream: BufWriter<TcpStream>,
     // The buffer for reading frames.
     buffer: BytesMut,
+    job_receiver: async_channel::Receiver<ReqTask>,
+    shutdown: Shutdown,
 }
 
 impl Connection {
-    pub fn new(socket: TcpStream) -> Connection {
+    pub fn new(
+        socket: TcpStream,
+        job_receiver: async_channel::Receiver<ReqTask>,
+        notify: broadcast::Receiver<()>,
+    ) -> Connection {
         Self {
             stream: BufWriter::new(socket),
             buffer: BytesMut::with_capacity(4 * 1024),
+            shutdown: Shutdown::new(notify),
+            job_receiver,
+        }
+    }
+
+    pub async fn start(&self) {
+        loop {
+            let _ = self.job_receiver.recv().await;
         }
     }
 }
@@ -46,32 +61,37 @@ impl Client {
             rsp: resp_tx,
         };
         let p = self.connection_pools.clone();
-        tokio::spawn(async move {
-            p.add_task(task).await;
-        });
+        tokio::spawn(async move { p.add_task(task).await.unwrap() });
         resp_rx.await?
     }
 }
 
 struct ConnectionPool {
-    connections: Mutex<Vec<Connection>>,
+    job_signal: async_channel::Sender<ReqTask>,
+    shutdown_sender: broadcast::Sender<()>,
 }
 
 impl ConnectionPool {
     pub async fn new(s: i32, addr: &str) -> crate::Result<ConnectionPool> {
-        let mut connections: Vec<Connection> = vec![];
+        let (job_sender, job_receive) = async_channel::unbounded();
+        let (shutdown_sender, _) = broadcast::channel(1);
+
         for _ in 0..s {
             let socket = TcpStream::connect(addr).await?;
-            let connection = Connection::new(socket);
-            connections.push(connection);
+            let connection =
+                Connection::new(socket, job_receive.clone(), shutdown_sender.subscribe());
+            tokio::spawn(async move {
+                connection.start().await;
+            });
         }
         Ok(Self {
-            connections: Mutex::new(connections),
+            job_signal: job_sender,
+            shutdown_sender,
         })
     }
 
     pub async fn add_task(&self, task: ReqTask) -> crate::Result<bool> {
-        let connections = self.connections.lock().unwrap();
+        self.job_signal.send(task).await?;
         Ok(true)
     }
 }
