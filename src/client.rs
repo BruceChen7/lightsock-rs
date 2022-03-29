@@ -1,8 +1,3 @@
-use std::{
-    cell::RefCell,
-    sync::{Arc, Mutex},
-};
-
 use crate::shutdown::Shutdown;
 use bytes::{BufMut, Bytes, BytesMut};
 use tokio::{
@@ -99,7 +94,7 @@ impl Client {
     }
 
     pub async fn stop(&mut self) -> crate::Result<()> {
-        self.notify_shutdown.send(());
+        let _ = self.notify_shutdown.send(());
         self.shutdown().await?;
         Ok(())
     }
