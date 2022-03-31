@@ -9,7 +9,7 @@ use tokio::{
 type Response<T> = oneshot::Sender<crate::Result<T>>;
 
 #[derive(Debug)]
-struct Connection {
+pub struct ClientPoolConnection {
     stream: BufWriter<TcpStream>,
     // The buffer for reading frames.
     buffer: BytesMut,
@@ -18,13 +18,13 @@ struct Connection {
     shutdown_complete: mpsc::Sender<()>,
 }
 
-impl Connection {
+impl ClientPoolConnection {
     pub fn new(
         socket: TcpStream,
         job_receiver: async_channel::Receiver<ReqTask>,
         notify: broadcast::Receiver<()>,
         shutdown_complete: mpsc::Sender<()>,
-    ) -> Connection {
+    ) -> ClientPoolConnection {
         Self {
             stream: BufWriter::new(socket),
             buffer: BytesMut::with_capacity(4 * 1024),
@@ -64,7 +64,7 @@ impl Client {
 
         for _ in 0..s {
             let socket = TcpStream::connect(addr).await?;
-            let connection = Connection::new(
+            let connection = ClientPoolConnection::new(
                 socket,
                 job_receive.clone(),
                 shutdown_sender.subscribe(),
@@ -89,6 +89,7 @@ impl Client {
             rsp: resp_tx,
         };
         // 捕获的必须实现send
+        // spawn中的引用的生命周期，必须是static
         tokio::spawn(async move { self.add_task(task).await });
         resp_rx.await?
     }
