@@ -1,3 +1,4 @@
+use lightsock_rs::client;
 use lightsock_rs::server;
 use tokio::{net::TcpListener, signal};
 
@@ -6,7 +7,9 @@ async fn main() -> lightsock_rs::Result<()> {
     tracing_subscriber::fmt::try_init()?;
     // Bind a TCP listener
     let listener = TcpListener::bind(&format!("127.0.0.1:{}", "6328")).await?;
+    // remote client
+    let client = client::Client::new(32, "127.0.0.1:2386").await?;
 
-    server::run_local_server(listener, signal::ctrl_c()).await;
+    server::run_local_server(listener, client, signal::ctrl_c()).await?;
     Ok(())
 }

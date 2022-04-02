@@ -57,10 +57,11 @@ pub struct Client {
 }
 
 impl Client {
-    pub async fn new(s: i32, notify: Sender<()>, addr: &str) -> crate::Result<Self> {
+    pub async fn new(s: i32, addr: &str) -> crate::Result<Self> {
         let (job_sender, job_receive) = async_channel::unbounded();
         let (shutdown_sender, _) = broadcast::channel(1);
         let (connection_shutdown_complete, connection_shutdown_recv) = mpsc::channel(s as usize);
+        let (notify_shutdown, _) = broadcast::channel(1);
 
         for _ in 0..s {
             let socket = TcpStream::connect(addr).await?;
@@ -78,7 +79,7 @@ impl Client {
             job_signal: job_sender,
             shutdown_sender,
             shutdown_complete: connection_shutdown_recv,
-            notify_shutdown: notify,
+            notify_shutdown,
         })
     }
 
