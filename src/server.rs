@@ -14,13 +14,15 @@ pub async fn run_local_server(
     shutdown: impl Future,
 ) -> crate::Result<()> {
     let mut cli = client;
+    let (notify_shutdown, _) = broadcast::channel(1);
     tokio::select! {
-        _ = handle_local_server(listener,&mut cli) => {
+        _ = handle_local_server(listener,&mut cli, &notify_shutdown) => {
         }
         _ = shutdown => {
             info!("local server shutdown");
         }
     }
+    drop(notify_shutdown);
     cli.stop().await?;
     Ok(())
 }
@@ -28,9 +30,10 @@ pub async fn run_local_server(
 pub async fn handle_local_server(
     listener: TcpListener,
     client: &mut client::Client,
+    notify_shutdown: &broadcast::Sender<()>,
 ) -> crate::Result<()> {
-    let (notify_shutdown, _) = broadcast::channel(1);
     info!("accepting inbound connections");
+    let mut noti_receive = notify_shutdown.subscribe();
     tokio::select! {
         _ = async {
             loop {
@@ -39,12 +42,13 @@ pub async fn handle_local_server(
                 let conn = ServerConnection::new(sock);
                 tokio::spawn(async move { process_local_server(conn, shutdown) });
             }
-            // 用来给类型推导
             Ok::<_, io::Error>(())
+
         }=> {}
+        _ = noti_receive.recv() => {
+            info!("shutdown")
+        }
     }
-    // 通知关闭server connection
-    drop(notify_shutdown);
     Ok(())
 }
 
