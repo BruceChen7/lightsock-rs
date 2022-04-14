@@ -14,8 +14,7 @@ impl Cipher {
             let mut w: Vec<u8> = (0..255).collect();
             w.shuffle(&mut rng);
             let mut same = false;
-            for item in w.iter().enumerate() {
-                let (i, v) = item;
+            for (i, v) in w.iter().enumerate() {
                 if i == *v as usize {
                     same = true;
                     break;
@@ -28,8 +27,7 @@ impl Cipher {
         }
 
         let mut decripted_passord = vec![0; 256];
-        for item in words.iter().enumerate() {
-            let (i, p) = item;
+        for (i, p) in words.iter().enumerate() {
             decripted_passord[*p as usize] = i as u8;
         }
         Self {
