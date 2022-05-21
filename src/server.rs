@@ -1,27 +1,31 @@
 use crate::server_conn::ServerConnection;
-use std::future::Future;
-use tracing::{field::debug, info};
+use std::{future::Future, sync::Arc};
+use tracing::info;
 
 use crate::shutdown::Shutdown;
 use std::io;
 use tokio::{net::TcpListener, sync::broadcast};
 
-use crate::client::{self, Client};
+use crate::client::Client;
 
 pub async fn run_local_server(
     listener: TcpListener,
-    client: Client,
+    client: Arc<Client>,
     shutdown: impl Future,
 ) -> crate::Result<()> {
-    let mut cli = client;
+    let cli = client.clone();
+    // 外部shutdown信号
+    // 用来退出
     let (notify_shutdown, _) = broadcast::channel(1);
     tokio::select! {
-        _ = handle_local_server(listener,&mut cli, &notify_shutdown) => {
+        _ = handle_local_server(listener, client, &notify_shutdown) => {
         }
+        // 用来退出
         _ = shutdown => {
             info!("local server shutdown");
         }
     }
+    // 通知各个connection结束任务
     drop(notify_shutdown);
     cli.stop().await?;
     Ok(())
@@ -29,7 +33,7 @@ pub async fn run_local_server(
 
 pub async fn handle_local_server(
     listener: TcpListener,
-    client: &mut client::Client,
+    client: Arc<Client>,
     notify_shutdown: &broadcast::Sender<()>,
 ) -> crate::Result<()> {
     info!("accepting inbound connections");
@@ -44,7 +48,7 @@ pub async fn handle_local_server(
             }
             Ok::<_, io::Error>(())
 
-        }=> {}
+        } => {}
         _ = noti_receive.recv() => {
             info!("shutdown")
         }

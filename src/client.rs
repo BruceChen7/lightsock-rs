@@ -1,21 +1,21 @@
+use std::sync::Mutex;
+
 use crate::shutdown::Shutdown;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 use tokio::{
     io::BufWriter,
     net::TcpStream,
-    sync::{broadcast, broadcast::Sender, mpsc, oneshot},
+    sync::{broadcast, mpsc, oneshot},
 };
 
 type Response<T> = oneshot::Sender<crate::Result<T>>;
 
-#[derive(Debug)]
 pub struct ClientPoolConnection {
     stream: BufWriter<TcpStream>,
     // The buffer for reading frames.
     buffer: BytesMut,
     job_receiver: async_channel::Receiver<ReqTask>,
     shutdown: Shutdown,
-    shutdown_complete: mpsc::Sender<()>,
 }
 
 impl ClientPoolConnection {
@@ -23,26 +23,25 @@ impl ClientPoolConnection {
         socket: TcpStream,
         job_receiver: async_channel::Receiver<ReqTask>,
         notify: broadcast::Receiver<()>,
-        shutdown_complete: mpsc::Sender<()>,
     ) -> ClientPoolConnection {
         Self {
             stream: BufWriter::new(socket),
             buffer: BytesMut::with_capacity(4 * 1024),
             shutdown: Shutdown::new(notify),
             job_receiver,
-            shutdown_complete,
         }
     }
 
-    pub async fn start(&self) -> crate::Result<()> {
+    pub async fn start(&mut self) -> crate::Result<()> {
         while !self.shutdown.is_shutdown() {
-            // let _ = tokio::select! {
-            //     res  = self.job_receiver.recv().await => res?,
-            //     _ = self.shutdown.recv() => {
-            //     }
-            // };
+            let _ = tokio::select! {
+                _res  = self.job_receiver.recv() => {
+
+                },
+                _ = self.shutdown.recv() => {
+                },
+            };
         }
-        self.shutdown_complete.send(()).await?;
         Ok(())
     }
 }
@@ -50,52 +49,43 @@ impl ClientPoolConnection {
 pub struct Client {
     // connection_pools: Arc<ConnectionPool>,
     notify_shutdown: broadcast::Sender<()>,
-    size: i32,
     job_signal: async_channel::Sender<ReqTask>,
     shutdown_sender: broadcast::Sender<()>,
-    shutdown_complete: mpsc::Receiver<()>,
 }
 
 impl Client {
     pub async fn new(s: i32, addr: &str) -> crate::Result<Self> {
         let (job_sender, job_receive) = async_channel::unbounded();
         let (shutdown_sender, _) = broadcast::channel(1);
-        let (connection_shutdown_complete, connection_shutdown_recv) = mpsc::channel(s as usize);
         let (notify_shutdown, _) = broadcast::channel(1);
 
         for _ in 0..s {
             let socket = TcpStream::connect(addr).await?;
-            let connection = ClientPoolConnection::new(
-                socket,
-                job_receive.clone(),
-                shutdown_sender.subscribe(),
-                connection_shutdown_complete.clone(),
-            );
+            let mut connection =
+                ClientPoolConnection::new(socket, job_receive.clone(), shutdown_sender.subscribe());
+            // 多个线程来执行请求任务
             tokio::spawn(async move { connection.start().await });
         }
 
         Ok(Self {
-            size: s,
             job_signal: job_sender,
             shutdown_sender,
-            shutdown_complete: connection_shutdown_recv,
             notify_shutdown,
         })
     }
 
-    pub async fn request(&'static self, content: Bytes) -> crate::Result<Option<Bytes>> {
+    pub async fn request(&self, content: Bytes) -> crate::Result<Option<Bytes>> {
         let (resp_tx, resp_rx) = oneshot::channel();
         let task = ReqTask {
             req: Some(content),
             rsp: resp_tx,
         };
-        // 捕获的必须实现send
-        // spawn中的引用的生命周期，必须是static
-        tokio::spawn(async move { self.add_task(task).await });
+        // 添加任务，返回响应
+        let _ = self.add_task(task).await;
         resp_rx.await?
     }
 
-    pub async fn stop(&mut self) -> crate::Result<()> {
+    pub async fn stop(&self) -> crate::Result<()> {
         let _ = self.notify_shutdown.send(());
         self.shutdown().await?;
         Ok(())
@@ -106,16 +96,9 @@ impl Client {
         Ok(true)
     }
 
-    pub async fn shutdown(&mut self) -> crate::Result<()> {
-        let mut i = 0;
+    pub async fn shutdown(&self) -> crate::Result<()> {
         self.shutdown_sender.send(())?;
-        loop {
-            if self.size == i {
-                return Ok(());
-            }
-            self.shutdown_complete.recv().await;
-            i = i + 1
-        }
+        Ok(())
     }
 }
 
