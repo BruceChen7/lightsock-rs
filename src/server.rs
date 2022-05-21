@@ -1,9 +1,9 @@
 use crate::server_conn::ServerConnection;
-use std::{future::Future, sync::Arc};
+use std::{future::Future, sync::Arc, time::Duration};
+use tokio::{net::TcpStream, time};
 use tracing::info;
 
 use crate::shutdown::Shutdown;
-use std::io;
 use tokio::{net::TcpListener, sync::broadcast};
 
 use crate::client::Client;
@@ -31,36 +31,52 @@ pub async fn run_local_server(
     Ok(())
 }
 
-pub async fn handle_local_server(
-    listener: TcpListener,
-    client: Arc<Client>,
+pub async fn handle_accept(listener: &TcpListener) -> crate::Result<TcpStream> {
+    let mut backoff = 1;
+
+    // Try to accept a few times
+    loop {
+        match listener.accept().await {
+            Ok((socket, _)) => return Ok(socket),
+            Err(err) => {
+                if backoff > 64 {
+                    // Accept has failed too many times. Return the error.
+                    // 返回真正的error
+                    return Err(err.into());
+                }
+            }
+        }
+
+        // Pause execution until the back off period elapses.
+        time::sleep(Duration::from_secs(backoff)).await;
+
+        // Double the back off
+        backoff *= 2;
+    }
+}
+
+async fn handle_local_server(
+    _listener: TcpListener,
+    _client: Arc<Client>,
     notify_shutdown: &broadcast::Sender<()>,
 ) -> crate::Result<()> {
     info!("accepting inbound connections");
     let mut noti_receive = notify_shutdown.subscribe();
-    tokio::select! {
-        _ = async {
-            loop {
-                let (sock, _) = listener.accept().await?;
-                let shutdown = Shutdown::new(notify_shutdown.subscribe());
-                let conn = ServerConnection::new(sock);
-                tokio::spawn(async move { process_local_server(conn, shutdown) });
+    loop {
+        let _res = tokio::select! {
+            _ = noti_receive.recv() => {
+                info!("shutdown")
             }
-            Ok::<_, io::Error>(())
-
-        } => {}
-        _ = noti_receive.recv() => {
-            info!("shutdown")
-        }
+        };
+        return Ok(());
     }
-    Ok(())
 }
 
-async fn process_local_server(conn: ServerConnection, shutdown: Shutdown) -> crate::Result<()> {
+async fn _process_local_server(conn: ServerConnection, shutdown: Shutdown) -> crate::Result<()> {
     let mut cc = conn;
     while !shutdown.is_shutdown() {
         let _ = tokio::select! {
-            res = cc.read_frame() => { }
+            _res = cc.read_frame() => { }
         };
     }
     Ok(())
