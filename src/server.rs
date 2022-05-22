@@ -1,6 +1,6 @@
 use crate::server_conn::ServerConnection;
 use std::{future::Future, sync::Arc, time::Duration};
-use tokio::{net::TcpStream, time};
+use tokio::{io, net::TcpStream, time};
 use tracing::info;
 
 use crate::shutdown::Shutdown;
@@ -56,7 +56,7 @@ pub async fn handle_accept(listener: &TcpListener) -> crate::Result<TcpStream> {
 }
 
 async fn handle_local_server(
-    _listener: TcpListener,
+    listener: TcpListener,
     _client: Arc<Client>,
     notify_shutdown: &broadcast::Sender<()>,
 ) -> crate::Result<()> {
@@ -64,6 +64,7 @@ async fn handle_local_server(
     let mut noti_receive = notify_shutdown.subscribe();
     loop {
         let _res = tokio::select! {
+            _ = process_local_server(&listener, notify_shutdown.subscribe()) => {}
             _ = noti_receive.recv() => {
                 info!("shutdown")
             }
@@ -72,12 +73,22 @@ async fn handle_local_server(
     }
 }
 
-async fn _process_local_server(conn: ServerConnection, shutdown: Shutdown) -> crate::Result<()> {
-    let mut cc = conn;
-    while !shutdown.is_shutdown() {
-        let _ = tokio::select! {
-            _res = cc.read_frame() => { }
-        };
-    }
+async fn process_local_server(
+    listener: &TcpListener,
+    notify_shutdown: broadcast::Receiver<()>,
+) -> crate::Result<()> {
+    let sock = handle_accept(listener).await?;
+    let mut cc = ServerConnection::new(sock);
+    let shutdown = Shutdown::new(notify_shutdown);
+    // 每一个线程处理一个请求
+    // TODO(ming.chen): 可以选择固定的线程池来处理?
+    tokio::spawn(async move {
+        while !shutdown.is_shutdown() {
+            let _ = tokio::select! {
+                _res = cc.read_frame() => { }
+            };
+        }
+        Ok::<_, io::Error>(())
+    });
     Ok(())
 }
