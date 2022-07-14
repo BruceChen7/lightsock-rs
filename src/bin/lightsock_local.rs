@@ -13,6 +13,6 @@ async fn main() -> lightsock_rs::Result<()> {
     let client = client::Client::new(32, "127.0.0.1:2386").await?;
     let shared_client_pool = Arc::new(client);
 
-    server::run_local_server(listener, shared_client_pool, signal::ctrl_c()).await?;
+    server::run_server(listener, shared_client_pool, signal::ctrl_c()).await?;
     Ok(())
 }

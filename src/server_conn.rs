@@ -24,24 +24,22 @@ impl ServerConnection {
             buffer: BytesMut::with_capacity(4 * 1024),
         }
     }
-    pub async fn read_frame(&mut self) -> crate::Result<()> {
+    pub async fn read_frame(&mut self) -> crate::Result<Bytes> {
         loop {
             // 一个完整的包
-            if let Some(frame) = self.parse_frame()? {
-                return Ok(());
-            }
+            let _frame = self.parse_frame()?;
 
             if 0 == self.stream.read_buf(&mut self.buffer).await? {
                 if self.buffer.is_empty() {
-                    return Ok(());
+                    return Ok("".into());
                 } else {
-                    return Ok(());
+                    return Ok("".into());
                 }
             }
         }
     }
 
-    fn parse_frame(&mut self) -> crate::Result<Option<Frame>> {
-        Ok(Some(Frame::Simple(Bytes::from("hello world"))))
+    fn parse_frame(&mut self) -> crate::Result<Frame> {
+        Ok(Frame::Simple(Bytes::from("hello world")))
     }
 }

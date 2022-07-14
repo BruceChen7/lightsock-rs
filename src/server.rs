@@ -1,14 +1,14 @@
 use crate::server_conn::ServerConnection;
+use bytes::Bytes;
 use std::{future::Future, sync::Arc, time::Duration};
-use tokio::{io, net::TcpStream, time};
+use tokio::{net::TcpStream, time};
 use tracing::info;
 
-use crate::shutdown::Shutdown;
 use tokio::{net::TcpListener, sync::broadcast};
 
 use crate::client::Client;
 
-pub async fn run_local_server(
+pub async fn run_server(
     listener: TcpListener,
     client: Arc<Client>,
     shutdown: impl Future,
@@ -18,7 +18,7 @@ pub async fn run_local_server(
     // 用来退出
     let (notify_shutdown, _) = broadcast::channel(1);
     tokio::select! {
-        _ = handle_local_server(listener, client, &notify_shutdown) => {
+        _ = handler_server(listener, client, &notify_shutdown) => {
         }
         // 用来退出
         _ = shutdown => {
@@ -55,16 +55,16 @@ pub async fn handle_accept(listener: &TcpListener) -> crate::Result<TcpStream> {
     }
 }
 
-async fn handle_local_server(
+async fn handler_server(
     listener: TcpListener,
-    _client: Arc<Client>,
+    client: Arc<Client>,
     notify_shutdown: &broadcast::Sender<()>,
 ) -> crate::Result<()> {
     info!("accepting inbound connections");
     let mut noti_receive = notify_shutdown.subscribe();
     loop {
         let _res = tokio::select! {
-            _ = process_local_server(&listener, notify_shutdown.subscribe()) => {}
+            _ = process_server(&listener, notify_shutdown.subscribe(), client.clone()) => {}
             _ = noti_receive.recv() => {
                 info!("shutdown")
             }
@@ -73,22 +73,29 @@ async fn handle_local_server(
     }
 }
 
-async fn process_local_server(
+async fn process_server(
     listener: &TcpListener,
     notify_shutdown: broadcast::Receiver<()>,
+    client: Arc<Client>,
 ) -> crate::Result<()> {
     let sock = handle_accept(listener).await?;
     let mut cc = ServerConnection::new(sock);
-    let shutdown = Shutdown::new(notify_shutdown);
+    let mut shutdown = notify_shutdown;
     // 每一个线程处理一个请求
     // TODO(ming.chen): 可以选择固定的线程池来处理?
     tokio::spawn(async move {
-        while !shutdown.is_shutdown() {
-            let _ = tokio::select! {
-                _res = cc.read_frame() => { }
-            };
-        }
-        Ok::<_, io::Error>(())
+        tokio::select! {
+            r = cc.read_frame() => {
+                return Err(());
+            }
+            _ = shutdown.recv() => {
+                return Ok(());
+            }
+        };
     });
     Ok(())
+}
+
+async fn requst_remote(body: Bytes, client: Arc<Client>) -> crate::Result<Bytes> {
+    Ok("".into())
 }

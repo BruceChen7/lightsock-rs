@@ -96,7 +96,7 @@ impl Client {
         Ok(true)
     }
 
-    pub async fn shutdown(&self) -> crate::Result<()> {
+    async fn shutdown(&self) -> crate::Result<()> {
         // TODO(ming.chen): waiting all client to be shutdown
         self.shutdown_sender.send(())?;
         Ok(())
